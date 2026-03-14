@@ -5,7 +5,6 @@ import { createActorWithConfig } from "../config";
 import { getSecretParameter } from "../utils/urlParams";
 
 const ACTOR_QUERY_KEY = "actor";
-
 export function useActor() {
   const queryClient = useQueryClient();
   const actorQuery = useQuery<backendInterface>({
@@ -17,16 +16,20 @@ export function useActor() {
       return actor;
     },
     staleTime: Number.POSITIVE_INFINITY,
-    retry: 3,
+    enabled: true,
   });
 
   useEffect(() => {
     if (actorQuery.data) {
       queryClient.invalidateQueries({
-        predicate: (query) => !query.queryKey.includes(ACTOR_QUERY_KEY),
+        predicate: (query) => {
+          return !query.queryKey.includes(ACTOR_QUERY_KEY);
+        },
       });
       queryClient.refetchQueries({
-        predicate: (query) => !query.queryKey.includes(ACTOR_QUERY_KEY),
+        predicate: (query) => {
+          return !query.queryKey.includes(ACTOR_QUERY_KEY);
+        },
       });
     }
   }, [actorQuery.data, queryClient]);
