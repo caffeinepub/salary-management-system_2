@@ -81,3 +81,9 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Date input placeholder color when empty */
+input[type="date"]:not([value])::-webkit-datetime-edit,
+input[type="date"][value=""]::-webkit-datetime-edit {
+  color: hsl(var(--muted-foreground));
+}

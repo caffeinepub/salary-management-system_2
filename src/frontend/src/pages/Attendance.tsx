@@ -9,7 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { CalendarCheck } from "lucide-react";
+import { CalendarCheck, RotateCcw, Save, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import type { AttendanceRecord } from "../backend.d";
@@ -38,6 +38,8 @@ const INSTITUTES = [
   "Kasturba College Of Nursing",
 ];
 
+const ATTENDANCE_STORAGE_KEY = "salary_mgr_attendance";
+
 const SKELETON_ROWS = ["sk-att-1", "sk-att-2", "sk-att-3", "sk-att-4"];
 const SKELETON_COLS = ["c1", "c2", "c3", "c4", "c5", "c6"];
 
@@ -59,16 +61,12 @@ export default function Attendance() {
   const [rows, setRows] = useState<Record<string, AttRow>>({});
 
   function getRow(id: string): AttRow {
-    return rows[id] ?? { daysPresent: totalDays, daysAbsent: 0, leaves: 0 };
+    return rows[id] ?? { daysPresent: 0, daysAbsent: 0, leaves: 0 };
   }
 
   function setRow(id: string, field: keyof AttRow, val: number) {
     setRows((prev) => {
-      const cur = prev[id] ?? {
-        daysPresent: totalDays,
-        daysAbsent: 0,
-        leaves: 0,
-      };
+      const cur = prev[id] ?? { daysPresent: 0, daysAbsent: 0, leaves: 0 };
       const updated = { ...cur, [field]: val };
       if (field === "daysPresent") {
         updated.daysAbsent = Math.max(0, totalDays - val - updated.leaves);
@@ -77,6 +75,11 @@ export default function Attendance() {
       }
       return { ...prev, [id]: updated };
     });
+  }
+
+  function handleClear() {
+    setRows({});
+    toast.info("Attendance form cleared");
   }
 
   async function handleSaveAll() {
@@ -107,6 +110,41 @@ export default function Attendance() {
     }
   }
 
+  function handleDeleteAttendance() {
+    if (!selectedInstitute) {
+      toast.error("Please select an institute first");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Delete attendance for ${selectedInstitute} - ${MONTHS[month - 1]} ${year}? This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      const raw = JSON.parse(
+        localStorage.getItem(ATTENDANCE_STORAGE_KEY) ?? "[]",
+      );
+      const employeeIds = new Set(employees.map((e) => e.id));
+      const filtered = raw.filter(
+        (r: { employeeId: string; month: string; year: string }) =>
+          !(
+            employeeIds.has(r.employeeId) &&
+            String(r.month) === String(month) &&
+            String(r.year) === String(year)
+          ),
+      );
+      localStorage.setItem(ATTENDANCE_STORAGE_KEY, JSON.stringify(filtered));
+      setRows({});
+      toast.success(
+        `Attendance deleted for ${selectedInstitute} - ${MONTHS[month - 1]} ${year}`,
+      );
+    } catch {
+      toast.error("Failed to delete attendance");
+    }
+  }
+
   return (
     <div className="animate-fade-in">
       <div className="flex items-center justify-between mb-6">
@@ -116,13 +154,33 @@ export default function Attendance() {
             Select an institute and record monthly attendance
           </p>
         </div>
-        <Button
-          onClick={handleSaveAll}
-          disabled={recordAttendance.isPending || !selectedInstitute}
-          data-ocid="attendance.save_button"
-        >
-          {recordAttendance.isPending ? "Saving..." : "Save Attendance"}
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={handleClear}
+            data-ocid="attendance.clear.button"
+          >
+            <RotateCcw size={15} className="mr-1.5" />
+            Clear
+          </Button>
+          <Button
+            onClick={handleSaveAll}
+            disabled={recordAttendance.isPending || !selectedInstitute}
+            data-ocid="attendance.save_button"
+          >
+            <Save size={15} className="mr-1.5" />
+            {recordAttendance.isPending ? "Saving..." : "Save Attendance"}
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={handleDeleteAttendance}
+            disabled={!selectedInstitute}
+            data-ocid="attendance.delete.delete_button"
+          >
+            <Trash2 size={15} className="mr-1.5" />
+            Delete Attendance
+          </Button>
+        </div>
       </div>
 
       {/* Institute selector */}

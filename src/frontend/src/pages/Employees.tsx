@@ -929,7 +929,7 @@ export default function Employees() {
             <SectionTitle>Personal Details</SectionTitle>
             <Field label="Date of Birth">
               <Input
-                type="text"
+                type="date"
                 value={form.dob}
                 onChange={(e) => setField("dob", e.target.value)}
                 placeholder="dd-mmm,yyyy"
@@ -950,6 +950,7 @@ export default function Employees() {
                   const d = new Date(e.target.value);
                   setField("joiningDate", BigInt(d.getTime()) * 1_000_000n);
                 }}
+                placeholder="dd-mmm,yyyy"
                 data-ocid="employees.doj.input"
               />
             </Field>
@@ -1027,20 +1028,6 @@ export default function Employees() {
                 }
                 placeholder="45000"
                 data-ocid="employees.salary.input"
-              />
-            </Field>
-            <Field label="Allowances (₹)">
-              <Input
-                type="number"
-                value={Number(form.allowances)}
-                onChange={(e) =>
-                  setField(
-                    "allowances",
-                    BigInt(Math.floor(Number(e.target.value) || 0)),
-                  )
-                }
-                placeholder="5000"
-                data-ocid="employees.allowances.input"
               />
             </Field>
             <Field label="Bank Name">
