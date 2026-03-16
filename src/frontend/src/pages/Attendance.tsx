@@ -30,6 +30,14 @@ const MONTHS = [
   "December",
 ];
 
+const INSTITUTES = [
+  "Bhel Shiksha Mandal",
+  "Jawharlal Nehru School (PW)",
+  "Jawharlal Nehru School (SW)",
+  "Vikram Higher Secondary School",
+  "Kasturba College Of Nursing",
+];
+
 const SKELETON_ROWS = ["sk-att-1", "sk-att-2", "sk-att-3", "sk-att-4"];
 const SKELETON_COLS = ["c1", "c2", "c3", "c4", "c5", "c6"];
 
@@ -37,11 +45,16 @@ type AttRow = { daysPresent: number; daysAbsent: number; leaves: number };
 
 export default function Attendance() {
   const now = new Date();
+  const [selectedInstitute, setSelectedInstitute] = useState("");
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [year, setYear] = useState(now.getFullYear());
-  const { data: employees = [], isLoading } = useAllEmployees();
+  const { data: allEmployees = [], isLoading } = useAllEmployees();
   const recordAttendance = useRecordAttendance();
   const totalDays = new Date(year, month, 0).getDate();
+
+  const employees = selectedInstitute
+    ? allEmployees.filter((emp) => emp.institute === selectedInstitute)
+    : [];
 
   const [rows, setRows] = useState<Record<string, AttRow>>({});
 
@@ -67,8 +80,12 @@ export default function Attendance() {
   }
 
   async function handleSaveAll() {
+    if (!selectedInstitute) {
+      toast.error("Please select an institute first");
+      return;
+    }
     if (employees.length === 0) {
-      toast.error("No employees to save");
+      toast.error("No employees found for this institute");
       return;
     }
     try {
@@ -84,7 +101,7 @@ export default function Attendance() {
         };
       });
       await Promise.all(records.map((r) => recordAttendance.mutateAsync(r)));
-      toast.success("Attendance saved for all employees");
+      toast.success(`Attendance saved for ${selectedInstitute}`);
     } catch {
       toast.error("Failed to save attendance");
     }
@@ -96,16 +113,43 @@ export default function Attendance() {
         <div>
           <h1 className="font-display text-2xl font-bold">Attendance</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Record monthly attendance for all employees
+            Select an institute and record monthly attendance
           </p>
         </div>
         <Button
           onClick={handleSaveAll}
-          disabled={recordAttendance.isPending}
+          disabled={recordAttendance.isPending || !selectedInstitute}
           data-ocid="attendance.save_button"
         >
           {recordAttendance.isPending ? "Saving..." : "Save Attendance"}
         </Button>
+      </div>
+
+      {/* Institute selector */}
+      <div className="mb-4">
+        <label
+          htmlFor="institute-select"
+          className="text-sm font-medium mb-1 block"
+        >
+          Select Institute
+        </label>
+        <select
+          value={selectedInstitute}
+          onChange={(e) => {
+            setSelectedInstitute(e.target.value);
+            setRows({});
+          }}
+          className="h-9 rounded-md border border-input bg-card px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring w-full max-w-xs"
+          id="institute-select"
+          data-ocid="attendance.institute.select"
+        >
+          <option value="">-- Select Institute --</option>
+          {INSTITUTES.map((inst) => (
+            <option key={inst} value={inst}>
+              {inst}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="flex gap-3 mb-5">
@@ -138,7 +182,7 @@ export default function Attendance() {
           <TableHeader>
             <TableRow className="bg-secondary/50">
               <TableHead className="font-semibold">Employee</TableHead>
-              <TableHead className="font-semibold">Department</TableHead>
+              <TableHead className="font-semibold">Institute</TableHead>
               <TableHead className="font-semibold w-32">Days Present</TableHead>
               <TableHead className="font-semibold w-32">Days Absent</TableHead>
               <TableHead className="font-semibold w-32">Leaves</TableHead>
@@ -156,6 +200,20 @@ export default function Attendance() {
                   ))}
                 </TableRow>
               ))
+            ) : !selectedInstitute ? (
+              <TableRow>
+                <TableCell colSpan={6}>
+                  <div
+                    className="text-center py-12"
+                    data-ocid="attendance.empty_state"
+                  >
+                    <CalendarCheck className="w-10 h-10 text-muted-foreground/40 mx-auto mb-2" />
+                    <p className="text-sm text-muted-foreground">
+                      Please select an institute above to load employees.
+                    </p>
+                  </div>
+                </TableCell>
+              </TableRow>
             ) : employees.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={6}>
@@ -165,7 +223,7 @@ export default function Attendance() {
                   >
                     <CalendarCheck className="w-10 h-10 text-muted-foreground/40 mx-auto mb-2" />
                     <p className="text-sm text-muted-foreground">
-                      No employees found. Add employees first.
+                      No employees found for this institute.
                     </p>
                   </div>
                 </TableCell>
@@ -185,7 +243,7 @@ export default function Attendance() {
                         {emp.designation}
                       </p>
                     </TableCell>
-                    <TableCell className="text-sm">{emp.department}</TableCell>
+                    <TableCell className="text-sm">{emp.institute}</TableCell>
                     <TableCell>
                       <Input
                         type="number"

@@ -2122,3 +2122,25 @@ export function deleteEmployee(id: string): void {
   const existing = getRawEmployees().filter((e) => e.id !== id);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(existing));
 }
+
+export function exportAllData(): string {
+  const employees = getRawEmployees();
+  return JSON.stringify(employees, null, 2);
+}
+
+export function importAllData(jsonString: string): number {
+  const imported: StoredEmployee[] = JSON.parse(jsonString);
+  const existing = getRawEmployees();
+  const existingMap = new Map(existing.map((e) => [e.id, e]));
+  let count = 0;
+  for (const emp of imported) {
+    if (!existingMap.has(emp.id)) count++;
+    existingMap.set(emp.id, emp);
+  }
+  localStorage.setItem(STORAGE_KEY, JSON.stringify([...existingMap.values()]));
+  // Re-mark seeded so seed data isn't re-added on top
+  localStorage.setItem(`${STORAGE_KEY}_seeded`, "1");
+  return (
+    count + imported.filter((e) => existing.some((ex) => ex.id === e.id)).length
+  );
+}

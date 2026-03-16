@@ -7,6 +7,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Camera,
   Download,
@@ -46,6 +48,7 @@ import {
   useAllEmployees,
   useDeleteEmployee,
 } from "../hooks/useQueries";
+import { exportAllData, importAllData } from "../utils/employeeStorage";
 
 // SheetJS loaded via CDN in index.html
 declare let XLSX: any;
@@ -80,6 +83,43 @@ const GENDERS = ["Male", "Female", "Other"];
 const CATEGORIES = ["General", "OBC", "SC", "ST", "EWS"];
 const EMPLOYEE_TYPES = ["Regular", "Contract", "Temporary", "Probation"];
 const EMPLOYEE_STATUSES = ["Active", "Inactive", "Resigned", "Retired"];
+
+const BANKS = [
+  "BOI Bank",
+  "ICICI Bank",
+  "UCO Bank",
+  "HDFC Bank",
+  "State Bank of India",
+];
+
+const BANK_BRANCHES: Record<string, string[]> = {
+  "State Bank of India": ["(HET) Piplani", "(Kasturba) Habibganj"],
+  "ICICI Bank": ["Arera Colony"],
+  "BOI Bank": ["Indrapuri"],
+  "UCO Bank": ["Piplani"],
+  "HDFC Bank": ["Indrapuri"],
+};
+
+const COUNTRY_CODES = [
+  { code: "+91", label: "+91 (India)" },
+  { code: "+1", label: "+1 (USA/Canada)" },
+  { code: "+44", label: "+44 (UK)" },
+  { code: "+61", label: "+61 (Australia)" },
+  { code: "+81", label: "+81 (Japan)" },
+  { code: "+86", label: "+86 (China)" },
+  { code: "+49", label: "+49 (Germany)" },
+  { code: "+33", label: "+33 (France)" },
+  { code: "+971", label: "+971 (UAE)" },
+  { code: "+966", label: "+966 (Saudi Arabia)" },
+  { code: "+65", label: "+65 (Singapore)" },
+  { code: "+60", label: "+60 (Malaysia)" },
+  { code: "+92", label: "+92 (Pakistan)" },
+  { code: "+880", label: "+880 (Bangladesh)" },
+  { code: "+94", label: "+94 (Sri Lanka)" },
+  { code: "+977", label: "+977 (Nepal)" },
+  { code: "+975", label: "+975 (Bhutan)" },
+  { code: "+95", label: "+95 (Myanmar)" },
+];
 
 const SKELETON_ROWS = ["sk-emp-1", "sk-emp-2", "sk-emp-3", "sk-emp-4"];
 const SKELETON_COLS = ["c1", "c2", "c3", "c4", "c5", "c6", "c7"];
@@ -219,12 +259,14 @@ function SelectField({
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+      className={`w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-ring ${!value ? "text-muted-foreground" : ""}`}
       data-ocid={ocid}
     >
-      <option value="">{placeholder || "Select"}</option>
+      <option value="" className="text-muted-foreground">
+        {placeholder || "Select"}
+      </option>
       {options.map((o) => (
-        <option key={o} value={o}>
+        <option key={o} value={o} className="text-foreground">
           {o}
         </option>
       ))}
@@ -258,8 +300,6 @@ function resolveEmployeeType(raw: string): string {
 function rowToEmployee(
   row: Record<string, string | number | boolean>,
 ): Employee {
-  // Build a case-insensitive key lookup map, stripping spaces/underscores/hyphens
-  // so "Staff No", "staff_no", "staffno" all map to the same key "staffno"
   const keyMap: Record<string, string> = {};
   for (const k of Object.keys(row)) {
     keyMap[k.toLowerCase().replace(/[\s_\-\.]/g, "")] = k;
@@ -302,7 +342,6 @@ function rowToEmployee(
     return String(v).trim();
   };
 
-  // Resolve employee ID: prefer staffno, fall back to employeeid
   const empId = str("staffno") || str("employeeid");
 
   const rawInstitute = str("institute");
@@ -355,12 +394,16 @@ export default function Employees() {
   const { data: employees = [], isLoading } = useAllEmployees();
   const addEmployee = useAddEmployee();
   const deleteEmployee = useDeleteEmployee();
+  const queryClient = useQueryClient();
+  const backupInputRef = useRef<HTMLInputElement>(null);
   const [deleteTarget, setDeleteTarget] = useState<Employee | null>(null);
   const picInputRef = useRef<HTMLInputElement>(null);
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<Employee>(emptyForm());
   const [editId, setEditId] = useState<string | null>(null);
+  const [phonePrefix, setPhonePrefix] = useState("+91");
+  const [bankBranch, setBankBranch] = useState("");
 
   // Bulk import state
   const [importOpen, setImportOpen] = useState(false);
@@ -379,12 +422,16 @@ export default function Employees() {
   function openAdd() {
     setForm(emptyForm());
     setEditId(null);
+    setPhonePrefix("+91");
+    setBankBranch("");
     setOpen(true);
   }
 
   function openEdit(emp: Employee) {
     setForm({ ...emp });
     setEditId(emp.id);
+    setPhonePrefix("+91");
+    setBankBranch("");
     setOpen(true);
   }
 
@@ -548,6 +595,73 @@ export default function Employees() {
           />
           <Button
             variant="outline"
+            onClick={() => {
+              const json = exportAllData();
+              const blob = new Blob([json], { type: "application/json" });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = `employees_backup_${new Date().toISOString().slice(0, 10)}.json`;
+              a.click();
+              URL.revokeObjectURL(url);
+              toast.success("Backup exported successfully");
+            }}
+            data-ocid="employees.export.secondary_button"
+          >
+            <Download size={16} className="mr-2" /> Export Backup
+          </Button>
+          <input
+            ref={backupInputRef}
+            type="file"
+            accept=".json"
+            className="hidden"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              const text = await file.text();
+              try {
+                const count = importAllData(text);
+                queryClient.invalidateQueries({ queryKey: ["employees"] });
+                toast.success(`${count} employees restored from backup`);
+              } catch {
+                toast.error("Invalid backup file");
+              }
+              e.target.value = "";
+            }}
+            data-ocid="employees.backup.upload_button"
+          />
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="outline"
+                data-ocid="employees.backup.open_modal_button"
+              >
+                <Upload size={16} className="mr-2" /> Import Backup
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent data-ocid="employees.backup.dialog">
+              <AlertDialogHeader>
+                <AlertDialogTitle>Import Backup</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will add/update employees from the backup file. Existing
+                  employees will not be deleted.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel data-ocid="employees.backup.cancel_button">
+                  Cancel
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => backupInputRef.current?.click()}
+                  data-ocid="employees.backup.confirm_button"
+                >
+                  Choose File
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+          <Button
+            variant="outline"
             onClick={() => fileInputRef.current?.click()}
             data-ocid="employees.import.secondary_button"
           >
@@ -580,8 +694,8 @@ export default function Employees() {
               <TableHead className="font-semibold">Employee ID</TableHead>
               <TableHead className="font-semibold">Name</TableHead>
               <TableHead className="font-semibold">Designation</TableHead>
-              <TableHead className="font-semibold">Department</TableHead>
               <TableHead className="font-semibold">Institute</TableHead>
+              <TableHead className="font-semibold">Department</TableHead>
               <TableHead className="font-semibold">Basic Salary</TableHead>
               <TableHead className="font-semibold">Actions</TableHead>
             </TableRow>
@@ -625,11 +739,11 @@ export default function Employees() {
                   </TableCell>
                   <TableCell className="font-medium">{emp.name}</TableCell>
                   <TableCell>{emp.designation}</TableCell>
-                  <TableCell>
-                    <Badge variant="secondary">{emp.department}</Badge>
-                  </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {emp.institute || "—"}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="secondary">{emp.department}</Badge>
                   </TableCell>
                   <TableCell className="font-semibold">
                     {fmt(emp.basicSalary)}
@@ -718,7 +832,7 @@ export default function Employees() {
               <Input
                 value={form.id}
                 onChange={(e) => setField("id", e.target.value)}
-                placeholder="EMP001"
+                placeholder="Enter Employee ID"
                 disabled={!!editId}
                 data-ocid="employees.id.input"
               />
@@ -727,7 +841,7 @@ export default function Employees() {
               <Input
                 value={form.name}
                 onChange={(e) => setField("name", e.target.value)}
-                placeholder="Rajesh Kumar"
+                placeholder="Enter Name"
                 data-ocid="employees.name.input"
               />
             </Field>
@@ -735,17 +849,8 @@ export default function Employees() {
               <Input
                 value={form.designation}
                 onChange={(e) => setField("designation", e.target.value)}
-                placeholder="Software Engineer"
+                placeholder="Enter Designation"
                 data-ocid="employees.designation.input"
-              />
-            </Field>
-            <Field label="Department">
-              <SelectField
-                value={form.department}
-                onChange={(v) => setField("department", v)}
-                options={DEPARTMENTS}
-                placeholder="Select department"
-                data-ocid="employees.department.select"
               />
             </Field>
             <Field label="Institute">
@@ -755,6 +860,15 @@ export default function Employees() {
                 options={INSTITUTES}
                 placeholder="Select institute"
                 data-ocid="employees.institute.select"
+              />
+            </Field>
+            <Field label="Department">
+              <SelectField
+                value={form.department}
+                onChange={(v) => setField("department", v)}
+                options={DEPARTMENTS}
+                placeholder="Select department"
+                data-ocid="employees.department.select"
               />
             </Field>
             <Field label="Employee Type">
@@ -780,7 +894,7 @@ export default function Employees() {
               <textarea
                 value={form.address}
                 onChange={(e) => setField("address", e.target.value)}
-                placeholder="Full address"
+                placeholder="Enter Full Address"
                 rows={2}
                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring resize-none"
                 data-ocid="employees.address.textarea"
@@ -815,9 +929,10 @@ export default function Employees() {
             <SectionTitle>Personal Details</SectionTitle>
             <Field label="Date of Birth">
               <Input
-                type="date"
+                type="text"
                 value={form.dob}
                 onChange={(e) => setField("dob", e.target.value)}
+                placeholder="dd-mmm,yyyy"
                 data-ocid="employees.dob.input"
               />
             </Field>
@@ -843,6 +958,7 @@ export default function Employees() {
                 value={form.gender}
                 onChange={(v) => setField("gender", v)}
                 options={GENDERS}
+                placeholder="Select Gender"
                 data-ocid="employees.gender.select"
               />
             </Field>
@@ -851,6 +967,7 @@ export default function Employees() {
                 value={form.religion}
                 onChange={(v) => setField("religion", v)}
                 options={RELIGIONS}
+                placeholder="Select Religion"
                 data-ocid="employees.religion.select"
               />
             </Field>
@@ -859,16 +976,32 @@ export default function Employees() {
                 value={form.category}
                 onChange={(v) => setField("category", v)}
                 options={CATEGORIES}
+                placeholder="Select Category"
                 data-ocid="employees.category.select"
               />
             </Field>
             <Field label="Phone Number">
-              <Input
-                value={form.phone}
-                onChange={(e) => setField("phone", e.target.value)}
-                placeholder="9876543210"
-                data-ocid="employees.phone.input"
-              />
+              <div className="flex gap-2">
+                <select
+                  value={phonePrefix}
+                  onChange={(e) => setPhonePrefix(e.target.value)}
+                  className="h-9 rounded-md border border-input bg-background px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-ring text-foreground w-28 shrink-0"
+                  data-ocid="employees.phone_prefix.select"
+                >
+                  {COUNTRY_CODES.map(({ code, label }) => (
+                    <option key={code} value={code} className="text-foreground">
+                      {label}
+                    </option>
+                  ))}
+                </select>
+                <Input
+                  value={form.phone}
+                  onChange={(e) => setField("phone", e.target.value)}
+                  placeholder="9876543210"
+                  data-ocid="employees.phone.input"
+                  className="flex-1"
+                />
+              </div>
             </Field>
             <Field label="Email ID">
               <Input
@@ -911,18 +1044,33 @@ export default function Employees() {
               />
             </Field>
             <Field label="Bank Name">
-              <Input
+              <SelectField
                 value={form.bankName}
-                onChange={(e) => setField("bankName", e.target.value)}
-                placeholder="State Bank of India"
-                data-ocid="employees.bank_name.input"
+                onChange={(v) => {
+                  setField("bankName", v);
+                  setBankBranch("");
+                }}
+                options={BANKS}
+                placeholder="Select Bank"
+                data-ocid="employees.bank_name.select"
+              />
+            </Field>
+            <Field label="Bank Branch">
+              <SelectField
+                value={bankBranch}
+                onChange={(v) => setBankBranch(v)}
+                options={
+                  form.bankName ? (BANK_BRANCHES[form.bankName] ?? []) : []
+                }
+                placeholder="Select Branch"
+                data-ocid="employees.bank_branch.select"
               />
             </Field>
             <Field label="Bank Account Number">
               <Input
                 value={form.bankAccount}
                 onChange={(e) => setField("bankAccount", e.target.value)}
-                placeholder="1234567890"
+                placeholder="Enter account number"
                 data-ocid="employees.bank_account.input"
               />
             </Field>
@@ -930,7 +1078,7 @@ export default function Employees() {
               <Input
                 value={form.ifscCode}
                 onChange={(e) => setField("ifscCode", e.target.value)}
-                placeholder="SBIN0001234"
+                placeholder="Enter IFSC code"
                 data-ocid="employees.ifsc.input"
               />
             </Field>
@@ -941,7 +1089,7 @@ export default function Employees() {
               <Input
                 value={form.pfNumber}
                 onChange={(e) => setField("pfNumber", e.target.value)}
-                placeholder="MH/1234/5678"
+                placeholder="Enter PF number"
                 data-ocid="employees.pf_number.input"
               />
             </Field>
@@ -949,7 +1097,7 @@ export default function Employees() {
               <Input
                 value={form.esiNumber}
                 onChange={(e) => setField("esiNumber", e.target.value)}
-                placeholder="ESI1234567"
+                placeholder="Enter ESI number"
                 data-ocid="employees.esi_number.input"
               />
             </Field>
@@ -957,7 +1105,7 @@ export default function Employees() {
               <Input
                 value={form.aadhaarNo}
                 onChange={(e) => setField("aadhaarNo", e.target.value)}
-                placeholder="1234 5678 9012"
+                placeholder="Enter Aadhaar number"
                 data-ocid="employees.aadhaar.input"
               />
             </Field>
@@ -965,7 +1113,7 @@ export default function Employees() {
               <Input
                 value={form.panNo}
                 onChange={(e) => setField("panNo", e.target.value)}
-                placeholder="ABCDE1234F"
+                placeholder="Enter PAN number"
                 data-ocid="employees.pan.input"
               />
             </Field>
@@ -973,7 +1121,7 @@ export default function Employees() {
               <Input
                 value={form.uanNo}
                 onChange={(e) => setField("uanNo", e.target.value)}
-                placeholder="100123456789"
+                placeholder="Enter UAN number"
                 data-ocid="employees.uan.input"
               />
             </Field>
@@ -981,7 +1129,7 @@ export default function Employees() {
               <Input
                 value={form.licNo}
                 onChange={(e) => setField("licNo", e.target.value)}
-                placeholder="LIC policy number"
+                placeholder="Enter LIC number"
                 data-ocid="employees.lic.input"
               />
             </Field>
@@ -1022,7 +1170,7 @@ export default function Employees() {
         }}
       >
         <DialogContent
-          className="max-w-4xl max-h-[85vh] overflow-y-auto"
+          className="sm:max-w-4xl w-full max-h-[85vh] overflow-y-auto overflow-x-hidden"
           data-ocid="employees.import.dialog"
         >
           <DialogHeader>
