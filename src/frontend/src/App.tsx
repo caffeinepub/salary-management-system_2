@@ -33,11 +33,7 @@ const rootRoute = createRootRoute({
 
 function AppShell() {
   const { user } = useAuth();
-
-  if (!user) {
-    return <LoginPage />;
-  }
-
+  if (!user) return <LoginPage />;
   return (
     <Layout>
       <Outlet />

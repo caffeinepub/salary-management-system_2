@@ -1,3 +1,13 @@
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,11 +28,27 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Pencil, Plus, Search, Users } from "lucide-react";
-import { useState } from "react";
+import {
+  Camera,
+  Download,
+  Pencil,
+  Plus,
+  Search,
+  Trash2,
+  Upload,
+  Users,
+} from "lucide-react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import type { Employee } from "../backend.d";
-import { useAddEmployee, useAllEmployees } from "../hooks/useQueries";
+import {
+  useAddEmployee,
+  useAllEmployees,
+  useDeleteEmployee,
+} from "../hooks/useQueries";
+
+// SheetJS loaded via CDN in index.html
+declare let XLSX: any;
 
 const DEPARTMENTS = [
   "Engineering",
@@ -31,6 +57,14 @@ const DEPARTMENTS = [
   "Operations",
   "Sales",
   "Marketing",
+];
+
+const INSTITUTES = [
+  "Bhel Shiksha Mandal",
+  "Jawharlal Nehru School (PW)",
+  "Jawharlal Nehru School (SW)",
+  "Vikram Higher Secondary School",
+  "Kasturba College Of Nursing",
 ];
 
 const RELIGIONS = [
@@ -49,6 +83,36 @@ const EMPLOYEE_STATUSES = ["Active", "Inactive", "Resigned", "Retired"];
 
 const SKELETON_ROWS = ["sk-emp-1", "sk-emp-2", "sk-emp-3", "sk-emp-4"];
 const SKELETON_COLS = ["c1", "c2", "c3", "c4", "c5", "c6", "c7"];
+
+const TEMPLATE_COLUMNS = [
+  "EmployeeID",
+  "Name",
+  "Designation",
+  "Department",
+  "Institute",
+  "EmployeeType",
+  "EmployeeStatus",
+  "BasicSalary",
+  "Allowances",
+  "DateOfBirth",
+  "DateOfJoining",
+  "Gender",
+  "Religion",
+  "Category",
+  "Phone",
+  "EmailID",
+  "Address",
+  "BHELQuarter",
+  "BankName",
+  "BankAccount",
+  "IFSCCode",
+  "PFNumber",
+  "ESINumber",
+  "AadhaarNo",
+  "PANNo",
+  "UANNo",
+  "LICNo",
+];
 
 const emptyForm = (): Employee => ({
   id: "",
@@ -80,6 +144,33 @@ const emptyForm = (): Employee => ({
   uanNo: "",
   licNo: "",
 });
+
+async function compressImage(file: File): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const MAX = 200;
+      let { width, height } = img;
+      if (width > MAX || height > MAX) {
+        if (width > height) {
+          height = Math.round((height * MAX) / width);
+          width = MAX;
+        } else {
+          width = Math.round((width * MAX) / height);
+          height = MAX;
+        }
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext("2d")!.drawImage(img, 0, 0, width, height);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL("image/jpeg", 0.8));
+    };
+    img.src = url;
+  });
+}
 
 function fmt(n: bigint) {
   return new Intl.NumberFormat("en-IN", {
@@ -141,13 +232,142 @@ function SelectField({
   );
 }
 
+/** Map institute abbreviations to full names */
+const INSTITUTE_ABBR_MAP: Record<string, string> = {
+  bsm: "Bhel Shiksha Mandal",
+  "jns(pw)": "Jawharlal Nehru School (PW)",
+  "jns(sw)": "Jawharlal Nehru School (SW)",
+  vhss: "Vikram Higher Secondary School",
+  kcon: "Kasturba College Of Nursing",
+};
+
+function resolveInstitute(raw: string): string {
+  const lower = raw.trim().toLowerCase();
+  if (INSTITUTE_ABBR_MAP[lower]) return INSTITUTE_ABBR_MAP[lower];
+  return raw.trim();
+}
+
+function resolveEmployeeType(raw: string): string {
+  const lower = raw.trim().toLowerCase();
+  if (lower === "permanent") return "Permanent";
+  if (lower === "adhoc") return "Temporary";
+  if (lower === "temporary") return "Temporary";
+  return raw.trim();
+}
+
+function rowToEmployee(
+  row: Record<string, string | number | boolean>,
+): Employee {
+  // Build a case-insensitive key lookup map, stripping spaces/underscores/hyphens
+  // so "Staff No", "staff_no", "staffno" all map to the same key "staffno"
+  const keyMap: Record<string, string> = {};
+  for (const k of Object.keys(row)) {
+    keyMap[k.toLowerCase().replace(/[\s_\-\.]/g, "")] = k;
+  }
+
+  const get = (lower: string) => keyMap[lower] ?? "";
+
+  const str = (lowerKey: string) => {
+    const k = get(lowerKey);
+    return k ? String(row[k] ?? "").trim() : "";
+  };
+
+  const num = (lowerKey: string) => {
+    const k = get(lowerKey);
+    return BigInt(Math.floor(Number(k ? row[k] : 0) || 0));
+  };
+
+  const dateToNs = (lowerKey: string): bigint => {
+    const k = get(lowerKey);
+    const v = k ? row[k] : undefined;
+    if (!v) return BigInt(Date.now()) * 1_000_000n;
+    if (typeof v === "number") {
+      const date = XLSX.SSF.parse_date_code(v);
+      const ms = Date.UTC(date.y, date.m - 1, date.d);
+      return BigInt(ms) * 1_000_000n;
+    }
+    const d = new Date(String(v));
+    if (!Number.isNaN(d.getTime())) return BigInt(d.getTime()) * 1_000_000n;
+    return BigInt(Date.now()) * 1_000_000n;
+  };
+
+  const dobStr = (lowerKey: string): string => {
+    const k = get(lowerKey);
+    const v = k ? row[k] : undefined;
+    if (!v) return "";
+    if (typeof v === "number") {
+      const date = XLSX.SSF.parse_date_code(v);
+      return `${date.y}-${String(date.m).padStart(2, "0")}-${String(date.d).padStart(2, "0")}`;
+    }
+    return String(v).trim();
+  };
+
+  // Resolve employee ID: prefer staffno, fall back to employeeid
+  const empId = str("staffno") || str("employeeid");
+
+  const rawInstitute = str("institute");
+  const resolvedInstitute = rawInstitute ? resolveInstitute(rawInstitute) : "";
+
+  const rawStatus = str("status");
+  const rawEmployeeType = str("employeetype");
+  const resolvedType = rawStatus
+    ? resolveEmployeeType(rawStatus)
+    : rawEmployeeType
+      ? resolveEmployeeType(rawEmployeeType)
+      : "";
+
+  const bhelRaw = get("bhelquarter");
+  const bhelVal = bhelRaw ? row[bhelRaw] : "";
+
+  return {
+    id: empId,
+    name: str("name"),
+    designation: str("designation"),
+    department: str("department"),
+    institute: resolvedInstitute,
+    employeeType: resolvedType,
+    employeeStatus: str("employeestatus") || "Active",
+    basicSalary: num("basicsalary"),
+    allowances: num("allowances"),
+    dob: dobStr("dateofbirth"),
+    joiningDate: dateToNs("dateofjoining"),
+    gender: str("gender"),
+    religion: str("religion"),
+    category: str("category"),
+    phone: str("phone"),
+    emailId: str("emailid"),
+    address: str("address"),
+    bhelQuarter: String(bhelVal).toLowerCase() === "yes",
+    bankName: str("bankname"),
+    bankAccount: str("bankaccount"),
+    ifscCode: str("ifsccode"),
+    pfNumber: str("pfnumber"),
+    esiNumber: str("esinumber"),
+    aadhaarNo: str("aadhaarno"),
+    panNo: str("panno"),
+    uanNo: str("uanno"),
+    licNo: str("licno"),
+    profilePic: "",
+  };
+}
+
 export default function Employees() {
   const { data: employees = [], isLoading } = useAllEmployees();
   const addEmployee = useAddEmployee();
+  const deleteEmployee = useDeleteEmployee();
+  const [deleteTarget, setDeleteTarget] = useState<Employee | null>(null);
+  const picInputRef = useRef<HTMLInputElement>(null);
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<Employee>(emptyForm());
   const [editId, setEditId] = useState<string | null>(null);
+
+  // Bulk import state
+  const [importOpen, setImportOpen] = useState(false);
+  const [importRows, setImportRows] = useState<Employee[]>([]);
+  const [importErrors, setImportErrors] = useState<string[]>([]);
+  const [importing, setImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const filtered = employees.filter(
     (e) =>
@@ -173,8 +393,8 @@ export default function Employees() {
   }
 
   async function handleSubmit() {
-    if (!form.name || !form.id || !form.department) {
-      toast.error("Please fill in Employee ID, Name and Department");
+    if (!form.name || !form.id || !form.designation) {
+      toast.error("Please fill in Employee ID, Name and Designation");
       return;
     }
     try {
@@ -184,6 +404,126 @@ export default function Employees() {
     } catch {
       toast.error("Failed to save employee");
     }
+  }
+
+  function downloadTemplate() {
+    const sampleRow: Record<string, string | number> = {
+      EmployeeID: "EMP001",
+      Name: "Rajesh Kumar",
+      Designation: "Teacher",
+      Department: "Science",
+      Institute: "Bhel Shiksha Mandal",
+      EmployeeType: "Regular",
+      EmployeeStatus: "Active",
+      BasicSalary: 45000,
+      Allowances: 5000,
+      DateOfBirth: "1985-06-15",
+      DateOfJoining: "2010-04-01",
+      Gender: "Male",
+      Religion: "Hindu",
+      Category: "General",
+      Phone: "9876543210",
+      EmailID: "rajesh@example.com",
+      Address: "123 Main St, Bhopal",
+      BHELQuarter: "No",
+      BankName: "State Bank of India",
+      BankAccount: "1234567890",
+      IFSCCode: "SBIN0001234",
+      PFNumber: "MH/1234/5678",
+      ESINumber: "ESI1234567",
+      AadhaarNo: "1234 5678 9012",
+      PANNo: "ABCDE1234F",
+      UANNo: "100123456789",
+      LICNo: "",
+    };
+    const ws = XLSX.utils.json_to_sheet([sampleRow], {
+      header: TEMPLATE_COLUMNS,
+    });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Employees");
+    XLSX.writeFile(wb, "employee_import_template.xlsx");
+  }
+
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = new Uint8Array(ev.target?.result as ArrayBuffer);
+        const wb = XLSX.read(data, { type: "array", cellDates: false });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { raw: true, defval: "" });
+        const errors: string[] = [];
+        const parsed: Employee[] = [];
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i] as Record<string, string | number | boolean>;
+          const emp = rowToEmployee(row);
+          if (!emp.id)
+            errors.push(`Row ${i + 2}: Employee ID (staffno) is missing`);
+          else if (!emp.name) errors.push(`Row ${i + 2}: Name is missing`);
+          else if (!emp.designation)
+            errors.push(`Row ${i + 2}: Designation is missing`);
+          else parsed.push(emp);
+        }
+        setImportRows(parsed);
+        setImportErrors(errors);
+        setImportOpen(true);
+      } catch {
+        toast.error(
+          "Failed to read file. Make sure it is a valid .xlsx or .csv file.",
+        );
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = "";
+  }
+
+  async function handleBulkImport() {
+    if (importRows.length === 0) return;
+    setImporting(true);
+    let success = 0;
+    let failed = 0;
+    for (const emp of importRows) {
+      try {
+        await addEmployee.mutateAsync(emp);
+        success++;
+      } catch {
+        failed++;
+      }
+    }
+    setImporting(false);
+    setImportOpen(false);
+    setImportRows([]);
+    setImportErrors([]);
+    if (failed === 0) {
+      toast.success(
+        `${success} employee${success !== 1 ? "s" : ""} imported successfully`,
+      );
+    } else {
+      toast.warning(`${success} imported, ${failed} failed`);
+    }
+  }
+
+  async function handleDeleteConfirm() {
+    if (!deleteTarget) return;
+    try {
+      await deleteEmployee.mutateAsync(deleteTarget.id);
+      toast.success(`${deleteTarget.name} deleted permanently`);
+      setDeleteTarget(null);
+    } catch {
+      toast.error("Failed to delete employee");
+    }
+  }
+
+  async function handleProfilePicChange(
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const dataUrl = await compressImage(file);
+    setField("profilePic", dataUrl);
+    e.target.value = "";
   }
 
   return (
@@ -197,9 +537,26 @@ export default function Employees() {
             {employees.length} total employees
           </p>
         </div>
-        <Button onClick={openAdd} data-ocid="employees.add.primary_button">
-          <Plus size={16} className="mr-2" /> Add Employee
-        </Button>
+        <div className="flex items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            className="hidden"
+            onChange={handleFileSelect}
+            data-ocid="employees.upload_button"
+          />
+          <Button
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+            data-ocid="employees.import.secondary_button"
+          >
+            <Upload size={16} className="mr-2" /> Import Excel
+          </Button>
+          <Button onClick={openAdd} data-ocid="employees.add.primary_button">
+            <Plus size={16} className="mr-2" /> Add Employee
+          </Button>
+        </div>
       </div>
 
       <div className="relative mb-4">
@@ -286,6 +643,15 @@ export default function Employees() {
                     >
                       <Pencil size={15} />
                     </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                      onClick={() => setDeleteTarget(emp)}
+                      data-ocid={`employees.delete_button.${idx + 1}`}
+                    >
+                      <Trash2 size={15} />
+                    </Button>
                   </TableCell>
                 </TableRow>
               ))
@@ -309,6 +675,45 @@ export default function Employees() {
           <div className="grid grid-cols-2 gap-4 py-2">
             {/* Basic Info */}
             <SectionTitle>Basic Information</SectionTitle>
+            {/* Profile Picture - spans full width */}
+            <div className="col-span-2 flex flex-col items-center gap-3 py-2">
+              <button
+                type="button"
+                className="w-24 h-24 rounded-full border-2 border-border overflow-hidden bg-secondary flex items-center justify-center cursor-pointer relative group p-0"
+                onClick={() => picInputRef.current?.click()}
+                aria-label="Upload profile photo"
+              >
+                {form.profilePic ? (
+                  <img
+                    src={form.profilePic}
+                    alt="Profile"
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <Camera size={32} className="text-muted-foreground/50" />
+                )}
+                <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity rounded-full">
+                  <Camera size={20} className="text-white" />
+                </div>
+              </button>
+              <input
+                ref={picInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleProfilePicChange}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => picInputRef.current?.click()}
+                data-ocid="employees.profile_pic.upload_button"
+              >
+                <Camera size={14} className="mr-1" />
+                {form.profilePic ? "Change Photo" : "Upload Photo"}
+              </Button>
+            </div>
             <Field label="Employee ID *">
               <Input
                 value={form.id}
@@ -326,7 +731,7 @@ export default function Employees() {
                 data-ocid="employees.name.input"
               />
             </Field>
-            <Field label="Designation">
+            <Field label="Designation *">
               <Input
                 value={form.designation}
                 onChange={(e) => setField("designation", e.target.value)}
@@ -334,7 +739,7 @@ export default function Employees() {
                 data-ocid="employees.designation.input"
               />
             </Field>
-            <Field label="Department *">
+            <Field label="Department">
               <SelectField
                 value={form.department}
                 onChange={(v) => setField("department", v)}
@@ -344,11 +749,12 @@ export default function Employees() {
               />
             </Field>
             <Field label="Institute">
-              <Input
+              <SelectField
                 value={form.institute}
-                onChange={(e) => setField("institute", e.target.value)}
-                placeholder="BHEL Haridwar"
-                data-ocid="employees.institute.input"
+                onChange={(v) => setField("institute", v)}
+                options={INSTITUTES}
+                placeholder="Select institute"
+                data-ocid="employees.institute.select"
               />
             </Field>
             <Field label="Employee Type">
@@ -603,6 +1009,153 @@ export default function Employees() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Bulk Import Preview Dialog */}
+      <Dialog
+        open={importOpen}
+        onOpenChange={(v) => {
+          setImportOpen(v);
+          if (!v) {
+            setImportRows([]);
+            setImportErrors([]);
+          }
+        }}
+      >
+        <DialogContent
+          className="max-w-4xl max-h-[85vh] overflow-y-auto"
+          data-ocid="employees.import.dialog"
+        >
+          <DialogHeader>
+            <DialogTitle className="font-display">Import Employees</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {importErrors.length > 0 && (
+              <div
+                className="rounded-md bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive space-y-1"
+                data-ocid="employees.import.error_state"
+              >
+                <p className="font-semibold">Skipped rows with errors:</p>
+                {importErrors.map((err) => (
+                  <p key={err}>{err}</p>
+                ))}
+              </div>
+            )}
+
+            {importRows.length === 0 ? (
+              <p
+                className="text-sm text-muted-foreground text-center py-6"
+                data-ocid="employees.import.empty_state"
+              >
+                No valid employee rows found in the file.
+              </p>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  {importRows.length} employee
+                  {importRows.length !== 1 ? "s" : ""} ready to import:
+                </p>
+                <div className="rounded-md border border-border overflow-hidden">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-secondary/50">
+                        <TableHead>#</TableHead>
+                        <TableHead>Employee ID</TableHead>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Designation</TableHead>
+                        <TableHead>Institute</TableHead>
+                        <TableHead>Type</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {importRows.map((emp, i) => (
+                        <TableRow
+                          key={emp.id}
+                          data-ocid={`employees.import.item.${i + 1}`}
+                        >
+                          <TableCell className="text-muted-foreground">
+                            {i + 1}
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">
+                            {emp.id}
+                          </TableCell>
+                          <TableCell>{emp.name}</TableCell>
+                          <TableCell>{emp.designation}</TableCell>
+                          <TableCell>{emp.institute || "—"}</TableCell>
+                          <TableCell>{emp.employeeType || "—"}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </>
+            )}
+
+            <div className="flex items-center gap-2 pt-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={downloadTemplate}
+                data-ocid="employees.import.template.button"
+              >
+                <Download size={14} className="mr-1" /> Download Template
+              </Button>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setImportOpen(false);
+                setImportRows([]);
+                setImportErrors([]);
+              }}
+              data-ocid="employees.import.cancel_button"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleBulkImport}
+              disabled={importing || importRows.length === 0}
+              data-ocid="employees.import.confirm_button"
+            >
+              {importing
+                ? "Importing..."
+                : `Import ${importRows.length} Employee${importRows.length !== 1 ? "s" : ""}`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={(o) => !o && setDeleteTarget(null)}
+      >
+        <AlertDialogContent data-ocid="employees.delete.dialog">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Employee Permanently?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to permanently delete{" "}
+              <strong>{deleteTarget?.name}</strong>? This will also remove all
+              their attendance and salary records. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-ocid="employees.delete.cancel_button">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={handleDeleteConfirm}
+              data-ocid="employees.delete.confirm_button"
+            >
+              Delete Permanently
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

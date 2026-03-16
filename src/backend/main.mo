@@ -2,7 +2,6 @@ import Map "mo:core/Map";
 import Text "mo:core/Text";
 import Array "mo:core/Array";
 import Order "mo:core/Order";
-import Runtime "mo:core/Runtime";
 import Iter "mo:core/Iter";
 import Time "mo:core/Time";
 import Nat "mo:core/Nat";
@@ -12,9 +11,8 @@ import MixinAuthorization "authorization/MixinAuthorization";
 import AccessControl "authorization/access-control";
 
 actor {
-  // V1 type kept for stable variable migration compatibility.
-  // The deployed canister has 'employees' with this shape; it must
-  // remain here so Motoko can deserialise the old state on upgrade.
+  // ── Legacy types kept for stable variable migration compatibility ──
+
   type EmployeeV1 = {
     id : Text;
     name : Text;
@@ -28,7 +26,13 @@ actor {
     allowances : Nat;
   };
 
-  // Current Employee type with all new fields.
+  public type UserProfile = {
+    name : Text;
+    employeeId : ?Text;
+  };
+
+  // ── Current Employee type ──
+
   type Employee = {
     id : Text;
     name : Text;
@@ -90,21 +94,18 @@ actor {
     leaves : Nat;
   };
 
-  public type UserProfile = {
-    name : Text;
-    employeeId : ?Text;
-  };
+  // ── Stable variables (legacy preserved for upgrade compatibility) ──
 
-  // 'employees' retains V1 type to deserialise existing stable state.
-  // All live data lives in 'employeesV2' after postupgrade.
-  let employees = Map.empty<Text, EmployeeV1>();
+  let employees = Map.empty<Text, EmployeeV1>();      // legacy V1, not used
+  let userProfiles = Map.empty<Principal, UserProfile>(); // legacy, not used
+  let accessControlState = AccessControl.initState(); // legacy, not used
+  include MixinAuthorization(accessControlState);     // legacy mixin kept for stable state compat
+
+  // ── Active stable variables ──
+
   let employeesV2 = Map.empty<Text, Employee>();
   let salaryRecords = Map.empty<Text, SalaryRecord>();
   let attendanceRecords = Map.empty<Text, AttendanceRecord>();
-  let userProfiles = Map.empty<Principal, UserProfile>();
-
-  let accessControlState = AccessControl.initState();
-  include MixinAuthorization(accessControlState);
 
   // Migrate V1 records into V2 on upgrade.
   system func postupgrade() {
@@ -144,92 +145,46 @@ actor {
     };
   };
 
-  // ── User profile management ─────────────────────────────────────
+  // ── Employee management (no auth checks) ──────────────────────────
 
-  public query ({ caller }) func getCallerUserProfile() : async ?UserProfile {
-    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
-      Runtime.trap("Unauthorized: Only users can view profiles");
-    };
-    userProfiles.get(caller);
-  };
-
-  public query ({ caller }) func getUserProfile(user : Principal) : async ?UserProfile {
-    if (caller != user and not AccessControl.isAdmin(accessControlState, caller)) {
-      Runtime.trap("Unauthorized: Can only view your own profile");
-    };
-    userProfiles.get(user);
-  };
-
-  public shared ({ caller }) func saveCallerUserProfile(profile : UserProfile) : async () {
-    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
-      Runtime.trap("Unauthorized: Only users can save profiles");
-    };
-    userProfiles.add(caller, profile);
-  };
-
-  // ── Employee management ─────────────────────────────────────────
-
-  public shared ({ caller }) func addEmployee(employee : Employee) : async () {
-    if (not (AccessControl.isAdmin(accessControlState, caller))) {
-      Runtime.trap("Unauthorized: Only admins can add employees");
-    };
+  public shared func addEmployee(employee : Employee) : async () {
     employeesV2.add(employee.id, employee);
   };
 
-  public query ({ caller }) func getEmployee(id : Text) : async ?Employee {
-    if (not (AccessControl.isAdmin(accessControlState, caller))) {
-      Runtime.trap("Unauthorized: Only admins can view employee details");
-    };
+  public query func getEmployee(id : Text) : async ?Employee {
     employeesV2.get(id);
   };
 
-  public query ({ caller }) func getAllEmployees() : async [Employee] {
-    if (not (AccessControl.isAdmin(accessControlState, caller))) {
-      Runtime.trap("Unauthorized: Only admins can view employees");
-    };
+  public query func getAllEmployees() : async [Employee] {
     employeesV2.values().toArray().sort();
   };
 
-  // ── Attendance management ───────────────────────────────────────
+  // ── Attendance management ─────────────────────────────────────────
 
-  public shared ({ caller }) func recordAttendance(record : AttendanceRecord) : async () {
-    if (not (AccessControl.isAdmin(accessControlState, caller))) {
-      Runtime.trap("Unauthorized: Only admins can record attendance");
-    };
+  public shared func recordAttendance(record : AttendanceRecord) : async () {
     let key = record.employeeId # "_" # record.month.toText() # "_" # record.year.toText();
     attendanceRecords.add(key, record);
   };
 
-  // ── Salary management ───────────────────────────────────────────
+  // ── Salary management ─────────────────────────────────────────────
 
-  public shared ({ caller }) func addSalaryRecord(record : SalaryRecord) : async () {
-    if (not (AccessControl.isAdmin(accessControlState, caller))) {
-      Runtime.trap("Unauthorized: Only admins can add salary records");
-    };
+  public shared func addSalaryRecord(record : SalaryRecord) : async () {
     let key = record.employeeId # "_" # record.month.toText() # "_" # record.year.toText();
     switch (salaryRecords.get(key)) {
-      case (null) {
-        salaryRecords.add(key, record);
-      };
+      case (null) { salaryRecords.add(key, record) };
       case (?existing) {
-        if (existing.isFinalized) {
-          Runtime.trap("Cannot modify finalized salary record");
+        if (not existing.isFinalized) {
+          salaryRecords.add(key, record);
         };
-        salaryRecords.add(key, record);
       };
     };
   };
 
-  // ── Reports ─────────────────────────────────────────────────────
+  // ── Reports ───────────────────────────────────────────────────────
 
-  public query ({ caller }) func getMonthlyPayBill(month : Nat, year : Nat) : async [SalaryRecord] {
-    if (not (AccessControl.isAdmin(accessControlState, caller))) {
-      Runtime.trap("Unauthorized: Only admins can view pay bills");
-    };
+  public query func getMonthlyPayBill(month : Nat, year : Nat) : async [SalaryRecord] {
     salaryRecords.values().toArray().filter(
-      func(record) {
-        record.month == month and record.year == year
-      }
+      func(record) { record.month == month and record.year == year }
     );
   };
 };

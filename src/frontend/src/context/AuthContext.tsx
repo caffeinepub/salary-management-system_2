@@ -19,7 +19,6 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const SESSION_KEY = "salary_mgr_session";
 const EMPLOYEES_KEY = "salary_mgr_employees";
 
-// Admin credentials (hardcoded)
 const ADMIN_USERNAME = "yourfriend";
 const ADMIN_PASSWORD = "enterpassword";
 
@@ -63,14 +62,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = useCallback(
     (username: string, password: string): string | null => {
-      // Check admin
       if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
         const authUser: AuthUser = { username, role: "admin" };
         setUser(authUser);
         localStorage.setItem(SESSION_KEY, JSON.stringify(authUser));
         return null;
       }
-      // Check employees
       const employees = getEmployeeCredentials();
       const match = employees.find(
         (e) => e.username === username && e.password === password,
